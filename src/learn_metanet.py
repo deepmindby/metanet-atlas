@@ -279,14 +279,14 @@ def train(task_vectors, args):
 if __name__ == "__main__":
     # 目标数据集和训练周期
     target_datasets = {
-        "Cars": 2,  # 35
-        "DTD": 2,  # 76
-        "EuroSAT": 2,  # 13
-        "GTSRB": 2,  # 11
-        "MNIST": 2,  # 5
-        "RESISC45": 2,  # 15
-        "SUN397": 2,  # 14
-        "SVHN": 2,  # 4
+        "Cars": 5,  # 35
+        "DTD": 5,  # 76
+        "EuroSAT": 5,  # 13
+        "GTSRB": 5,  # 11
+        "MNIST": 5,  # 5
+        "RESISC45": 5,  # 15
+        "SUN397": 5,  # 14
+        "SVHN": 5,  # 4
         # "CIFAR10": 5,
         # "CIFAR100": 6,
         # "ImageNet": 10,
@@ -308,7 +308,7 @@ if __name__ == "__main__":
     args.datasets = target_datasets
     # 设置默认参数
     args.lr = 1e-2  # MetaNet参数需要较高的学习率
-    args.epochs = 1  # 15
+    args.epochs = 5
     # 使用梯度累积模拟更大的批次大小
     args.batch_size = 64 if args.model == "ViT-L-14" else 128
     args.num_grad_accumulation = 2 if args.model == "ViT-L-14" else 1
