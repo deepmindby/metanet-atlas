@@ -1,7 +1,8 @@
-"""MetaNet-aTLAS模型训练脚本
+"""MetaNet-aTLAS Model Training Script
 
-此脚本用于训练MetaNet-aTLAS模型，该模型使用Meta-Net为每个样本动态生成
-任务向量组合系数，实现样本级别的知识组合。
+This script is used to train the MetaNet-aTLAS model, which uses Meta-Net to dynamically
+generate task vector combination coefficients for each sample, achieving sample-level
+knowledge composition.
 """
 
 import os
@@ -26,14 +27,14 @@ from src.distributed import cleanup_ddp, distribute_loader, is_main_process, set
 
 
 def lp_reg(x, p=None, gamma=0.5) -> torch.Tensor:
-    """L1或L2正则化项"""
+    """L1 or L2 regularization term"""
     return 0 if p is None else gamma * torch.norm(x, p=p, dim=0).mean()
 
 
 def main(rank, args):
-    """主函数，训练MetaNet-aTLAS模型"""
+    """Main function for training MetaNet-aTLAS model"""
 
-    # 加载任务向量池
+    # Load task vector pool
     # pool = [
     #     "Cars", "DTD", "EuroSAT", "GTSRB", "MNIST", "RESISC45", "SUN397", "SVHN",
     #     "CIFAR10", "CIFAR100", "ImageNet", "STL10", "Food101", "Caltech101", "Caltech256",
@@ -64,14 +65,14 @@ def main(rank, args):
 
 
 def train(task_vectors, args):
-    """训练函数
+    """Training function
 
-    参数:
+    Parameters:
     ----------
     task_vectors: Dict[str, TaskVector]
-        任务向量字典
+        Dictionary of task vectors
     args: argparse.Namespace
-        命令行参数
+        Command line arguments
     """
     setup_ddp(args.rank, args.world_size, port=args.port)
     target_dataset = args.target_dataset
@@ -81,17 +82,17 @@ def train(task_vectors, args):
     assert args.finetuning_mode in [
         "linear",
         "standard",
-    ], "只支持linear和standard微调模式。"
+    ], "Only linear and standard fine-tuning modes are supported."
 
     linearized_finetuning = args.finetuning_mode == "linear"
     if linearized_finetuning:
-        print("使用线性化微调。")
+        print("Using linearized fine-tuning.")
 
-    # 获取任务向量，排除目标数据集的任务向量
+    # Get task vectors, excluding the target dataset's task vector
     orig_dataset = target_dataset.replace("Val", "")
     task_vectors_list = [v for k, v in task_vectors.items() if orig_dataset != k]
 
-    # 初始化模型
+    # Initialize model
     if args.finetuning_mode == "linear":
         image_encoder = LinearizedImageEncoder(args, keep_lang=False)
         image_encoder.model = MetaNetLinearizedModel(
@@ -103,15 +104,15 @@ def train(task_vectors, args):
             image_encoder, task_vectors_list, blockwise=args.blockwise_coef
         )
 
-    # 获取分类头
+    # Get classification head
     classification_head = get_classification_head(args, target_dataset)
     model = ImageClassifier(image_encoder, classification_head)
 
-    # 冻结分类头
+    # Freeze classification head
     model.freeze_head()
     model = model.cuda()
 
-    # 使用更激进的随机裁剪和水平翻转预处理
+    # Use more aggressive random crop with horizontal flip preprocessing
     preprocess_fn = torchvision.transforms.Compose([
                                                        torchvision.transforms.RandomResizedCrop(
                                                            size=224, scale=(0.5, 1),
@@ -119,7 +120,7 @@ def train(task_vectors, args):
                                                        ), torchvision.transforms.RandomHorizontalFlip(p=0.5),
                                                    ] + model.train_preprocess.transforms[-3:])
 
-    # 获取数据集和数据加载器
+    # Get dataset and data loader
     dataset = get_dataset(
         target_dataset,
         preprocess_fn,
@@ -130,7 +131,7 @@ def train(task_vectors, args):
     data_loader = get_dataloader(dataset, is_train=True, args=args, image_encoder=None)
     num_batches = len(data_loader)
 
-    # 打印损失的频率设置
+    # Set print frequency
     if args.print_every * 10 < num_batches:
         print_every = int(num_batches / 10)
     elif args.print_every * 4 > num_batches:
@@ -138,7 +139,7 @@ def train(task_vectors, args):
     else:
         print_every = args.print_every
 
-    # 分布式训练设置
+    # Distributed training setup
     ddp_loader = distribute_loader(data_loader)
     ddp_model = torch.nn.parallel.DistributedDataParallel(
         model,
@@ -147,20 +148,20 @@ def train(task_vectors, args):
         output_device=args.rank,
     )
 
-    # 损失函数
+    # Loss function
     loss_fn = torch.nn.CrossEntropyLoss()
 
-    # 只训练需要梯度的参数
+    # Only train parameters that require gradients
     params = [p for p in ddp_model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.wd)
 
-    # 不使用预热阶段的学习率调度器
+    # Learning rate scheduler without warmup
     scheduler = cosine_lr(
         optimizer, args.lr, 0,
         args.epochs * num_batches // args.num_grad_accumulation,
     )
 
-    # 保存路径设置
+    # Setup save paths
     if linearized_finetuning:
         head_path = os.path.join(ckpdir, "learned_linear_metanet.pt")
         log_path = os.path.join(args.save, "learned_linear_metanet.json")
@@ -170,23 +171,23 @@ def train(task_vectors, args):
         log_path = os.path.join(args.save, "learned_metanet.json")
         meta_net = ddp_model.module.image_encoder.meta_net
 
-    # 混合精度训练
+    # Mixed precision training
     scaler = GradScaler()
 
-    # 记录零样本准确率
+    # Record zero-shot accuracy
     if is_main_process():
-        print(f"=> 在 {target_dataset} 上的零样本准确率：\t{100 * args.zs_acc[target_dataset]:.2f}%.")
+        print(f"=> Zero-shot accuracy on {target_dataset}: {100 * args.zs_acc[target_dataset]:.2f}%.")
         if os.path.exists(log_path):
             with open(log_path, 'r') as f:
                 comp_acc = json.load(f)
         else:
             comp_acc = {}
 
-    # 记录最佳状态
+    # Record best state
     best_meta_net = None
     best_acc = args.zs_acc[target_dataset]
 
-    # 开始训练
+    # Start training
     for epoch in range(args.epochs):
         ddp_loader.sampler.set_epoch(epoch)
         for i, batch in enumerate(ddp_loader):
@@ -205,11 +206,11 @@ def train(task_vectors, args):
                 logits = ddp_model(inputs)
                 labels = batch["labels"].cuda()
                 loss = loss_fn(logits, labels)
-                # 应用正则化
+                # Apply regularization
                 meta_net_params = torch.cat([p.flatten() for p in meta_net.parameters()])
                 reg = lp_reg(meta_net_params, args.lp_reg)
                 loss = loss + reg
-                # 缩放损失
+                # Scale loss
                 loss = loss / args.num_grad_accumulation
 
             scaler.scale(loss).backward()
@@ -224,7 +225,7 @@ def train(task_vectors, args):
 
             batch_time = time.time() - start_time
 
-            # 打印训练信息
+            # Print training info
             if (
                     step % print_every == 0
                     and ((i + 1) % args.num_grad_accumulation == 0)
@@ -232,44 +233,44 @@ def train(task_vectors, args):
             ):
                 percent_complete = 100 * (i + 1) / len(ddp_loader)
                 print(
-                    f"训练周期: {epoch} [{percent_complete:.0f}% {i + 1}/{num_batches}]\t"
-                    f"损失: {loss.item():.6f}\t数据时间 {data_time:.3f}\t批次时间 {batch_time:.3f}",
+                    f"Training epoch: {epoch} [{percent_complete:.0f}% {i + 1}/{num_batches}]\t"
+                    f"Loss: {loss.item():.6f}\tData time: {data_time:.3f}\tBatch time: {batch_time:.3f}",
                     flush=True,
                 )
 
-        # 每个epoch后评估
+        # Evaluate after each epoch
         if is_main_process():
             image_encoder = ddp_model.module.image_encoder
             acc = eval_single_dataset(image_encoder, target_dataset, args)["top1"]
             if acc > best_acc:
                 best_acc = acc
                 best_meta_net = {k: v.data.clone() for k, v in meta_net.state_dict().items()}
-                # 保存最佳模型
+                # Save best model
                 torch.save(best_meta_net, head_path)
 
-    # 保存结果
+    # Save results
     if is_main_process():
         comp_acc[target_dataset] = best_acc
         target_dataset_no_val = target_dataset.replace("Val", "")
 
-        # 加载最佳模型进行测试
+        # Load best model for testing
         if best_meta_net is not None:
-            # 找到更好的模型，加载它
+            # Found a better model, load it
             if linearized_finetuning:
                 ddp_model.module.image_encoder.model.meta_net.load_state_dict(best_meta_net)
             else:
                 ddp_model.module.image_encoder.meta_net.load_state_dict(best_meta_net)
-            print(f"加载精度为 {best_acc * 100:.2f}% 的最佳模型")
+            print(f"Loaded best model with accuracy {best_acc * 100:.2f}%")
         else:
-            # 没有找到更好的模型，使用当前模型
-            print(f"警告：训练未能超过零样本精度 {args.zs_acc[target_dataset] * 100:.2f}%")
-            print("使用最后一个epoch的模型进行测试")
+            # No better model found, use current model
+            print(f"Warning: Training did not exceed zero-shot accuracy {args.zs_acc[target_dataset] * 100:.2f}%")
+            print("Using the model from the last epoch for testing")
 
-        # 在测试集上评估
+        # Evaluate on test set
         image_encoder = ddp_model.module.image_encoder
         comp_acc[target_dataset_no_val] = eval_single_dataset(image_encoder, target_dataset_no_val, args)["top1"]
 
-        # 保存结果
+        # Save results
         with open(log_path, 'w') as f:
             json.dump(comp_acc, f, indent=4)
 
@@ -277,7 +278,7 @@ def train(task_vectors, args):
 
 
 if __name__ == "__main__":
-    # 目标数据集和训练周期
+    # Target datasets and training epochs
     target_datasets = {
         "Cars": 5,  # 35
         "DTD": 5,  # 76
@@ -303,13 +304,13 @@ if __name__ == "__main__":
         # "UCF101": 20,
     }
 
-    # 解析命令行参数
+    # Parse command line arguments
     args = parse_arguments()
     args.datasets = target_datasets
-    # 设置默认参数
-    args.lr = 1e-2  # MetaNet参数需要较高的学习率
+    # Set default parameters
+    args.lr = 1e-2  # MetaNet parameters need higher learning rate
     args.epochs = 5
-    # 使用梯度累积模拟更大的批次大小
+    # Use gradient accumulation to simulate larger batch sizes
     args.batch_size = 64 if args.model == "ViT-L-14" else 128
     args.num_grad_accumulation = 2 if args.model == "ViT-L-14" else 1
     args.print_every = 10
@@ -320,15 +321,15 @@ if __name__ == "__main__":
         args.save = f"checkpoints/{args.model}"
 
 
-    # 加载零样本准确率
+    # Load zero-shot accuracy
     with open(os.path.join(args.save, "zeroshot_accuracies.json"), 'r') as f:
         args.zs_acc = json.load(f)
 
     save_dir = args.save
     if args.subsample is not None:
         save_dir += f"_{args.subsample * 100:.0f}perc"
-        # 创建目录
+        # Create directory
         os.makedirs(save_dir, exist_ok=True)
 
-    # 启动分布式训练
+    # Launch distributed training
     torch.multiprocessing.spawn(main, args=(args,), nprocs=args.world_size)

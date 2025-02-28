@@ -1,6 +1,6 @@
-"""MetaNet-aTLAS模型评估脚本
+"""MetaNet-aTLAS Model Evaluation Script
 
-此脚本用于评估MetaNet-aTLAS模型在不同数据集上的性能。
+This script is used to evaluate the performance of MetaNet-aTLAS models on different datasets.
 """
 
 import os
@@ -16,18 +16,18 @@ from src.metanet_composition import MetaNetImageEncoder, MetaNetLinearizedModel
 
 
 def main(args):
-    """主函数，评估MetaNet-aTLAS模型
+    """Main function for evaluating MetaNet-aTLAS model
 
-    参数:
+    Parameters:
     ----------
     args: argparse.Namespace
-        命令行参数
+        Command line arguments
     """
     print("*" * 100)
-    print(f"评估MetaNet-aTLAS模型（{args.finetuning_mode}模式）")
+    print(f"Evaluating MetaNet-aTLAS model ({args.finetuning_mode} mode)")
     print("*" * 100)
 
-    # 加载任务向量池
+    # Load task vector pool
     # pool = [
     #     "Cars", "DTD", "EuroSAT", "GTSRB", "MNIST", "RESISC45", "SUN397", "SVHN",
     #     "CIFAR10", "CIFAR100", "ImageNet", "STL10", "Food101", "Caltech101", "Caltech256",
@@ -37,14 +37,14 @@ def main(args):
         "Cars", "DTD", "EuroSAT", "GTSRB", "MNIST", "RESISC45", "SUN397", "SVHN",
     ]
 
-    # 记录结果
+    # Record results
     all_results = {}
 
     for dataset in args.eval_datasets:
         print("-" * 100)
-        print(f"评估 {dataset}")
+        print(f"Evaluating {dataset}")
 
-        # 获取任务向量，排除当前数据集
+        # Get task vectors, excluding the current dataset
         task_vectors = []
         for ds in pool:
             if ds == dataset:
@@ -59,19 +59,19 @@ def main(args):
                 finetuned_checkpoint = f"{args.save}/{ds}Val/finetuned.pt"
                 task_vectors.append(NonLinearTaskVector(pretrained_checkpoint, finetuned_checkpoint))
 
-        # 加载模型和Meta-Net
+        # Load model and Meta-Net
         if args.finetuning_mode == "linear":
             image_encoder = LinearizedImageEncoder(args, keep_lang=False)
             image_encoder.model = MetaNetLinearizedModel(
                 image_encoder.model, task_vectors, blockwise=args.blockwise_coef
             )
 
-            # 加载训练好的Meta-Net
+            # Load trained Meta-Net
             meta_net_path = os.path.join(args.save, f"{dataset}Val", "learned_linear_metanet.pt")
             if os.path.exists(meta_net_path):
                 image_encoder.model.meta_net.load_state_dict(torch.load(meta_net_path))
             else:
-                print(f"警告：找不到{meta_net_path}，使用未训练的Meta-Net")
+                print(f"Warning: Could not find {meta_net_path}, using untrained Meta-Net")
 
         else:
             image_encoder = ImageEncoder(args)
@@ -79,25 +79,25 @@ def main(args):
                 image_encoder, task_vectors, blockwise=args.blockwise_coef
             )
 
-            # 加载训练好的Meta-Net
+            # Load trained Meta-Net
             meta_net_path = os.path.join(args.save, f"{dataset}Val", "learned_metanet.pt")
             if os.path.exists(meta_net_path):
                 image_encoder.meta_net.load_state_dict(torch.load(meta_net_path))
             else:
-                print(f"警告：找不到{meta_net_path}，使用未训练的Meta-Net")
+                print(f"Warning: Could not find {meta_net_path}, using untrained Meta-Net")
 
-        # 评估
+        # Evaluate
         result = eval_single_dataset(image_encoder, dataset, args)
         all_results[dataset] = result["top1"]
-        print(f"{dataset} 测试准确率: {100 * result['top1']:.2f}%")
+        print(f"{dataset} test accuracy: {100 * result['top1']:.2f}%")
 
-    # 计算平均准确率
+    # Calculate average accuracy
     avg_acc = sum(all_results.values()) / len(all_results)
     all_results["average"] = avg_acc
     print("-" * 100)
-    print(f"平均准确率: {100 * avg_acc:.2f}%")
+    print(f"Average accuracy: {100 * avg_acc:.2f}%")
 
-    # 保存结果
+    # Save results
     if args.finetuning_mode == "linear":
         results_path = os.path.join(args.save, "metanet_linear_results.json")
     else:
@@ -106,13 +106,13 @@ def main(args):
     with open(results_path, "w") as f:
         json.dump(all_results, f, indent=4)
 
-    print(f"结果已保存到 {results_path}")
+    print(f"Results saved to {results_path}")
 
 
 if __name__ == "__main__":
     args = parse_arguments()
 
-    # 设置评估数据集
+    # Set evaluation datasets
     if args.eval_datasets is None:
         args.eval_datasets = [
             "Cars", "DTD", "EuroSAT", "GTSRB", "MNIST", "RESISC45", "SUN397", "SVHN"

@@ -22,7 +22,7 @@ def main(ckpt_dir, model_name, datasets=None):
     save_dir = os.path.join(ckpt_dir, model_name)
 
     # Load results
-    atlas_path = os.path.join(save_dir, "learned_additions.json")
+    atlas_path = os.path.join(save_dir, "learned_additions_std_search.json")
     meta_atlas_path = os.path.join(save_dir, "learned_metanet.json")
 
     if not os.path.exists(atlas_path):

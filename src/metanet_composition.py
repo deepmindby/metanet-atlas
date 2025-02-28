@@ -1,10 +1,12 @@
-"""基于Meta-Net的任务向量动态组合实现
+"""Dynamic Task Vector Composition Based on Meta-Net
 
-这个模块实现了MetaNet-aTLAS算法，通过Meta-Net网络为每个样本动态生成
-任务向量组合系数，实现样本级别的知识组合。
+This module implements the MetaNet-aTLAS algorithm, which dynamically generates
+task vector composition coefficients for each sample through a Meta-Net network,
+enabling sample-level knowledge composition.
 
-与原始aTLAS不同，MetaNet-aTLAS根据输入样本的特性动态调整不同任务向量的
-组合权重，提高模型的适应性和泛化能力。
+Unlike the original aTLAS, MetaNet-aTLAS dynamically adjusts the combination weights
+of different task vectors according to the characteristics of the input sample,
+improving the model's adaptability and generalization ability.
 """
 
 import torch
@@ -13,119 +15,121 @@ from functorch import jvp, make_functional_with_buffers
 
 
 class MetaNet(nn.Module):
-    """Meta-Net网络，用于从样本特征生成任务向量组合系数
+    """Meta-Net network for generating task vector composition coefficients from sample features
 
-    网络结构为两层瓶颈结构(Linear-ReLU-Linear)，输入为样本特征，
-    输出为该样本对应的任务向量组合系数。
+    The network structure is a two-layer bottleneck architecture (Linear-ReLU-Linear),
+    with the sample features as input and the task vector composition coefficients
+    for that sample as output.
     """
 
     def __init__(self, input_dim, output_dim, hidden_dim=None):
-        """初始化Meta-Net
+        """Initialize Meta-Net
 
-        参数:
+        Parameters:
         ----------
         input_dim: int
-            输入特征维度
+            Input feature dimension
         output_dim: int
-            输出维度，等于任务向量的数量
+            Output dimension, equal to the number of task vectors
         hidden_dim: int, optional
-            隐藏层维度，默认为输入维度的1/4
+            Hidden layer dimension, defaults to 1/4 of the input dimension
         """
         super().__init__()
 
-        # 如果未指定隐藏层维度，则使用输入维度的1/4
+        # If hidden layer dimension is not specified, use 1/4 of the input dimension
         if hidden_dim is None:
             hidden_dim = max(input_dim // 4, output_dim)
 
-        # 两层瓶颈结构：Linear-ReLU-Linear
+        # Two-layer bottleneck structure: Linear-ReLU-Linear
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, output_dim)
         )
 
-        # 初始化为0，使得初始状态下的组合系数接近零
+        # Initialize to zero so that the combination coefficients are close to zero in the initial state
         nn.init.zeros_(self.net[0].weight)
         nn.init.zeros_(self.net[0].bias)
         nn.init.zeros_(self.net[2].weight)
         nn.init.zeros_(self.net[2].bias)
 
     def forward(self, x):
-        """前向传播
+        """Forward propagation
 
-        参数:
+        Parameters:
         ----------
         x: Tensor [batch_size, input_dim]
-            样本特征
+            Sample features
 
-        返回:
+        Returns:
         ----------
         coefficients: Tensor [batch_size, output_dim]
-            每个样本的任务向量组合系数
+            Task vector composition coefficients for each sample
         """
         return self.net(x)
 
 
 class MetaNetImageEncoder(nn.Module):
-    """基于Meta-Net的图像编码器，用于非线性模型的任务向量动态组合
+    """Meta-Net based image encoder for dynamic composition of task vectors in non-linear models
 
-    接收样本作为输入，先通过基础编码器获取特征，然后通过Meta-Net生成
-    任务向量组合系数，最后使用这些系数动态组合任务向量。
+    Takes samples as input, first obtains features through a base encoder, then generates
+    task vector composition coefficients through Meta-Net, and finally dynamically combines
+    task vectors using these coefficients.
     """
 
     def __init__(self, model, task_vectors, blockwise=False) -> None:
-        """初始化Meta-Net图像编码器
+        """Initialize Meta-Net image encoder
 
-        参数:
+        Parameters:
         ----------
         model: nn.Module
-            基础图像编码器模型
+            Base image encoder model
         task_vectors: List[NonLinearTaskVector]
-            任务向量列表
+            List of task vectors
         blockwise: bool, default: False
-            是否对每个参数块使用不同的系数
+            Whether to use different coefficients for each parameter block
         """
         super().__init__()
 
-        # 提取基础模型的功能函数和参数
+        # Extract the functions and parameters of the base model
         func, params, self.buffer = make_functional_with_buffers(model)
-        # 避免元张量无数据错误
+        # Avoid meta tensor no data error
         self.func = lambda p, b, x: func(p, b, x)
         self.params = torch.nn.ParameterList(params)
         for p in self.params:
             p.requires_grad = False
 
-        # 复制图像编码器的属性
+        # Copy attributes from the image encoder
         self.train_preprocess = model.train_preprocess
         self.val_preprocess = model.val_preprocess
         self.cache_dir = model.cache_dir
 
-        # 存储任务向量
+        # Store task vectors
         self.dparams = [[tv.vector[k] for k in tv.vector] for tv in task_vectors]
         self.blockwise = blockwise
 
-        # 获取模型的特征维度，这里假设是最后一个参数对象
-        # 注意：不同模型可能需要不同的方式获取特征维度
+        # Get the feature dimension of the model, assuming it's the last parameter object
+        # Note: Different models may need different ways to get the feature dimension
         if hasattr(model, 'model') and hasattr(model.model, 'ln_final'):
             feat_dim = model.model.ln_final.bias.numel()
         else:
-            # 如果无法确定，使用一个默认值或从模型结构推断
-            # 这里假设使用ViT的输出维度，通常是768（ViT-B）或1024（ViT-L）
+            # If can't determine, use a default value or infer from model structure
+            # Here we assume using ViT's output dimension, typically 768 (ViT-B) or 1024 (ViT-L)
             feat_dim = 768
 
-            # 初始化Meta-Net
+            # Initialize Meta-Net
         if blockwise:
-            # 如果使用blockwise，每个参数块有自己的系数
+            # If using blockwise, each parameter block has its own coefficients
             self.meta_net = MetaNet(feat_dim, len(task_vectors) * len(self.params))
         else:
-            # 否则每个任务向量有一个全局系数
+            # Otherwise each task vector has a global coefficient
             self.meta_net = MetaNet(feat_dim, len(task_vectors))
 
     def _apply(self, fn):
-        """重写_apply方法以重新定位buffer列表
+        """Override _apply method to relocate buffer list
 
-        注意：此函数签名适用于PyTorch 1.13.1。
-        更新版本添加了另一个可选参数`recurse=True`。
+        Note: This function signature is for PyTorch 1.13.1.
+        Newer versions have added another optional parameter `recurse=True`.
         """
         new_self = super()._apply(fn=fn)
         new_self.buffer = (fn(x) for x in new_self.buffer)
@@ -133,76 +137,76 @@ class MetaNetImageEncoder(nn.Module):
         return new_self
 
     def train(self, mode=True):
-        """设置训练模式"""
+        """Set training mode"""
         super().train(mode)
 
     def forward(self, x) -> torch.Tensor:
-        """前向传播
+        """Forward propagation
 
-        参数:
+        Parameters:
         ----------
         x: Tensor [batch_size, 3, H, W]
-            输入图像批次
+            Batch of input images
 
-        返回:
+        Returns:
         ----------
         features: Tensor [batch_size, feature_dim]
-            编码后的特征
+            Encoded features
         """
-        # 1. 首先获取基础特征
+        # 1. First get base features
         with torch.no_grad():
             base_features = self.func(self.params, self.buffer, x)
 
-        # 2. 使用Meta-Net生成组合系数
+        # 2. Generate combination coefficients using Meta-Net
         if self.blockwise:
-            # 如果使用blockwise，将系数重塑为[batch_size, n_task_vectors, n_params]
+            # If using blockwise, reshape coefficients to [batch_size, n_task_vectors, n_params]
             batch_coefficients = self.meta_net(base_features).reshape(-1, len(self.dparams), len(self.params))
         else:
-            # 否则系数形状为[batch_size, n_task_vectors]
+            # Otherwise coefficients shape is [batch_size, n_task_vectors]
             batch_coefficients = self.meta_net(base_features)
 
-        # 3. 对批次中的每个样本应用其特定的组合系数
+        # 3. Apply specific combination coefficients for each sample in the batch
         batch_size = x.size(0)
         all_outputs = []
 
         for i in range(batch_size):
             if self.blockwise:
-                # 对每个参数块使用不同的系数
+                # Use different coefficients for each parameter block
                 coefs = batch_coefficients[i]  # [n_task_vectors, n_params]
                 dparams = [sum([p * c[i] for p, c in zip(dp, coefs)]) for i, dp in enumerate(zip(*self.dparams))]
             else:
-                # 对每个任务向量使用全局系数
+                # Use global coefficients for each task vector
                 coefs = batch_coefficients[i]  # [n_task_vectors]
                 dparams = [sum([p * c for p, c in zip(dp, coefs)]) for dp in zip(*self.dparams)]
 
-            # 应用组合后的参数差异
+            # Apply combined parameter differences
             new_params = [dp + p for dp, p in zip(dparams, self.params)]
 
-            # 计算当前样本的输出
+            # Calculate output for current sample
             output = self.func(new_params, self.buffer, x[i:i + 1])
             all_outputs.append(output)
 
-        # 4. 合并所有样本的输出
+        # 4. Combine outputs from all samples
         return torch.cat(all_outputs, dim=0)
 
 
 class MetaNetLinearizedModel(nn.Module):
-    """基于Meta-Net的线性化模型，用于线性化模型的任务向量动态组合
+    """Meta-Net based linearized model for dynamic composition of task vectors in linearized models
 
-    类似于MetaNetImageEncoder，但专为线性化模型设计。
+    Similar to MetaNetImageEncoder, but designed specifically for linearized models.
     """
 
     def __init__(self, model, task_vectors, blockwise=False) -> None:
-        """初始化Meta-Net线性化模型
+        """Initialize Meta-Net linearized model
 
-        参数:
+        Parameters:
         ----------
         model: LinearizedModel
-            线性化的基础模型
+            Linearized base model
         task_vectors: List[LinearizedTaskVector]
-            线性化的任务向量列表
+            List of linearized task vectors
         blockwise: bool, default: False
-            是否对每个参数块使用不同的系数
+            Whether to use different coefficients for each parameter block
         """
         super().__init__()
 
@@ -211,51 +215,51 @@ class MetaNetLinearizedModel(nn.Module):
         self.buffers0 = model.buffers0
         self._model_name = model._model_name
 
-        # 存储任务向量
+        # Store task vectors
         self.dparams = [[tv.vector[k] for k in tv.vector if k.startswith('model.params.')] for tv in task_vectors]
         self.blockwise = blockwise
 
-        # 获取模型的特征维度
-        # 注意：这是一个简化实现，实际中可能需要根据具体模型调整
-        feat_dim = 768  # 假设使用ViT-B的特征维度
+        # Get the feature dimension of the model
+        # Note: This is a simplified implementation, in practice it may need to be adjusted according to the specific model
+        feat_dim = 768  # Assume using ViT-B's feature dimension
 
-        # 初始化Meta-Net
+        # Initialize Meta-Net
         if blockwise:
             self.meta_net = MetaNet(feat_dim, len(task_vectors) * len(self.params0))
         else:
             self.meta_net = MetaNet(feat_dim, len(task_vectors))
 
     def _apply(self, fn):
-        """重写_apply方法以重新定位buffer列表"""
+        """Override _apply method to relocate buffer list"""
         new_self = super()._apply(fn=fn)
         new_self.buffers0 = (fn(x) for x in new_self.buffers0)
         new_self.dparams = [[fn(x) for x in tv] for tv in new_self.dparams]
         return new_self
 
     def forward(self, x) -> torch.Tensor:
-        """前向传播
+        """Forward propagation
 
-        参数:
+        Parameters:
         ----------
         x: Tensor [batch_size, 3, H, W]
-            输入图像批次
+            Batch of input images
 
-        返回:
+        Returns:
         ----------
         outputs: Tensor [batch_size, feature_dim]
-            模型输出
+            Model outputs
         """
-        # 1. 首先获取基础特征用于生成系数
+        # 1. First get base features for generating coefficients
         with torch.no_grad():
             base_features = self.func0(self.params0, self.buffers0, x)
 
-        # 2. 使用Meta-Net生成组合系数
+        # 2. Generate combination coefficients using Meta-Net
         if self.blockwise:
             batch_coefficients = self.meta_net(base_features).reshape(-1, len(self.dparams), len(self.params0))
         else:
             batch_coefficients = self.meta_net(base_features)
 
-        # 3. 对批次中的每个样本应用其特定的组合系数
+        # 3. Apply specific combination coefficients for each sample in the batch
         batch_size = x.size(0)
         all_outputs = []
 
@@ -267,7 +271,7 @@ class MetaNetLinearizedModel(nn.Module):
                 coefs = batch_coefficients[i]
                 dparams = [sum([p * c for p, c in zip(dp, coefs)]) for dp in zip(*self.dparams)]
 
-            # 对线性化模型应用一阶泰勒展开
+            # Apply first-order Taylor expansion to linearized model
             out, dp = jvp(
                 lambda param: self.func0(param, self.buffers0, x[i:i + 1]),
                 (tuple(self.params0),),
@@ -276,5 +280,5 @@ class MetaNetLinearizedModel(nn.Module):
             output = out + dp
             all_outputs.append(output)
 
-        # 4. 合并所有样本的输出
+        # 4. Combine outputs from all samples
         return torch.cat(all_outputs, dim=0)
