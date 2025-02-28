@@ -95,6 +95,7 @@ def main(rank, args):
     classification_heads = [prim_head,] + classification_heads
     model = MultiHeadImageClassifier(image_encoder, classification_heads)
 
+    model = model.float()
     model.freeze_head()
     model = model.cuda()
 
@@ -173,16 +174,17 @@ def main(rank, args):
             data_time = time.time() - start_time
             
             split = [len(batch["images"]),] + [len(r_batch["images"]) for r_batch in rmng_batch]
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                logits = ddp_model(inputs, split)
-                labels = [batch["labels"].cuda(),] + [r_batch["labels"].cuda() for r_batch in rmng_batch]
-                all_losses = [loss_fn(x, y) for x, y in zip(logits, labels)]
-                loss = sum(all_losses)
-                # Apply regularisation if needed.
-                reg = lp_reg(coef, args.lp_reg)
-                loss = loss + reg
-                # Scale the loss.
-                loss = loss / args.num_grad_accumulation
+
+            # with torch.autocast(device_type='cuda', dtype=torch.float16):
+            logits = ddp_model(inputs, split)
+            labels = [batch["labels"].cuda(),] + [r_batch["labels"].cuda() for r_batch in rmng_batch]
+            all_losses = [loss_fn(x, y) for x, y in zip(logits, labels)]
+            loss = sum(all_losses)
+            # Apply regularisation if needed.
+            reg = lp_reg(coef, args.lp_reg)
+            loss = loss + reg
+            # Scale the loss.
+            loss = loss / args.num_grad_accumulation
 
             scaler.scale(loss).backward()
 

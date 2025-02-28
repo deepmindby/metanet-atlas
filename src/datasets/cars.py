@@ -135,7 +135,7 @@ class Cars:
                  num_workers=16):
         # Data loading code
 
-        self.train_dataset = PytorchStanfordCars(location, 'train', preprocess, download=True)
+        self.train_dataset = PytorchStanfordCars(location, 'train', preprocess, download=False)
         self.train_loader = torch.utils.data.DataLoader(
             self.train_dataset,
             shuffle=True,
@@ -143,7 +143,7 @@ class Cars:
             num_workers=num_workers,
         )
 
-        self.test_dataset = PytorchStanfordCars(location, 'test', preprocess, download=True)
+        self.test_dataset = PytorchStanfordCars(location, 'test', preprocess, download=False)
         self.test_loader = torch.utils.data.DataLoader(
             self.test_dataset,
             batch_size=batch_size,

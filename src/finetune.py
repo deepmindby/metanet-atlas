@@ -11,6 +11,10 @@ https://github.com/gortizji/tangent_task_arithmetic
 """
 
 import os
+gpu_ids = "4"
+os.environ["CUDA_VISIBLE_DEVICES"] = gpu_ids
+gpu_ids_list = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+
 import time
 import torch
 
@@ -28,8 +32,9 @@ from src.distributed import cleanup_ddp, distribute_loader, is_main_process, set
 
 
 def finetune(rank, args):
+    args.world_size = len(gpu_ids_list)
     setup_ddp(rank, args.world_size, port=args.port)
-
+    print(f"rank: {rank}, world_size: {args.world_size}")
     train_dataset = args.train_dataset
     ckpdir = os.path.join(args.save, train_dataset)
 

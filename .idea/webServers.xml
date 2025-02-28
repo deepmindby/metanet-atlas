@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="fe6dfa81-6cc8-4e4a-bcae-ce8d6361cfe2" name="atlas">
+        <fileTransfer rootFolder="/home/haichao/zby/atlas" accessType="SFTP" host="192.168.196.247" port="22" sshConfigId="83317e7f-3200-4306-a279-094af9ebf413" sshConfig="haichao@192.168.196.247:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

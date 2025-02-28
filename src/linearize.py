@@ -146,7 +146,10 @@ class LinearizedImageEncoder(abc.ABC, nn.Module):
             LinearizedImageEncoder: The loaded taylorized image encoder.
         """
         print(f"Loading image encoder from {filename}")
-        state_dict = torch.load(filename, map_location="cpu")
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        state_dict = torch.load(filename, map_location=device)
+        # state_dict = torch.load(filename, map_location="cpu")
 
         # ImageEncoder expects a DotDict
         args = DotDict({"model": state_dict["model_name"]})

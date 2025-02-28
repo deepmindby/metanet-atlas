@@ -17,7 +17,7 @@ class CIFAR10:
 
 
         self.train_dataset = PyTorchCIFAR10(
-            root=location, download=True, train=True, transform=preprocess
+            root=location, download=False, train=True, transform=preprocess
         )
 
         self.train_loader = torch.utils.data.DataLoader(

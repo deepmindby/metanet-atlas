@@ -11,7 +11,7 @@ https://github.com/gortizji/tangent_task_arithmetic
 
 import argparse
 import os
-
+import random
 import torch
 
 def int_or_float(value):
@@ -21,10 +21,14 @@ def int_or_float(value):
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
+
+    def generate_random_port():
+        return random.randint(1024, 65535)
+
     parser.add_argument(
         "--data-location",
         type=str,
-        default=os.path.expanduser("~/data"),
+        default=os.path.expanduser("/home/haichao/zby/atlas/data"),
         help="The root directory for the datasets.",
     )
     parser.add_argument(
@@ -162,10 +166,10 @@ def parse_arguments():
         help="How often to checkpoint the model.",
     )
     parser.add_argument(
-        "--port",
+        '--port',
         type=int,
-        default=12355,
-        help="Port for distributed training.",
+        default=generate_random_port(),
+        help="Port for distributed training. If not specified, a random port will be assigned."
     )
     parser.add_argument(
         "--seed",

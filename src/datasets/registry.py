@@ -51,8 +51,8 @@ class GenericDataset(object):
         self.train_loader = None
         self.test_dataset = None
         self.test_loader = None
-
         self.classnames = None   
+
 
 def split_train_into_train_val(dataset, new_dataset_class_name, batch_size, num_workers, val_fraction, max_val_samples=None, seed=0):
     assert val_fraction > 0. and val_fraction < 1.
@@ -98,6 +98,7 @@ def split_train_into_train_val(dataset, new_dataset_class_name, batch_size, num_
     new_dataset.classnames = copy.copy(dataset.classnames)
 
     return new_dataset
+
 
 def find_data_with_index(dataset, cls_idx):
     """Find the indices of the data corresponding to the designated class

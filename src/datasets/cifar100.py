@@ -10,7 +10,7 @@ class CIFAR100:
                  num_workers=16):
 
         self.train_dataset = PyTorchCIFAR100(
-            root=location, download=True, train=True, transform=preprocess
+            root=location, download=False, train=True, transform=preprocess
         )
 
         self.train_loader = torch.utils.data.DataLoader(

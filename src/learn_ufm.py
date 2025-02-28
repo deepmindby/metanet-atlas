@@ -446,8 +446,12 @@ if __name__ == "__main__":
     args.logdir += f"{args.model}"
     args.logdir += f"/test_time"
     args.target_datasets = {k:10 for k,v in args.target_datasets.items()}#10 epochs for few-shots using ViTs.
-        
+
+    if args.save is None:
+        args.save = "./checkpoints"
+
     args.save = os.path.join(args.save, f'{args.model}')
+
     if args.seed is not None:
         args.logdir += f"/{args.seed}"
         

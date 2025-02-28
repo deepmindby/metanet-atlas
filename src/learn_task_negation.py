@@ -6,6 +6,9 @@ Fred Zhang <frederic.zhang@adelaide.edu.au>
 Australian Institute for Machine Learning
 """
 import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+
 import time
 import json
 import torch
@@ -160,7 +163,12 @@ def main(rank, args):
         ddp_ctr_loader.sampler.set_epoch(epoch)
         ctr_iter = iter(ddp_ctr_loader)
         for i, batch in enumerate(ddp_tgt_loader):
-            ctr_batch = next(ctr_iter)
+            # ctr_batch = next(ctr_iter)
+            try:
+                ctr_batch = next(ctr_iter)
+            except StopIteration:
+                ctr_iter = iter(ddp_ctr_loader)
+                ctr_batch = next(ctr_iter)
             start_time = time.time()
 
             step = (
@@ -278,9 +286,10 @@ if __name__ == "__main__":
     args.print_every = 10
     args.ctr_dataset = "ImageNet" + "Val"
     if args.seed is not None:
-        args.save = f"checkpoints_{args.seed}/{args.model}"
+        args.save = f"/home/haichao/zby/atlas/checkpoints_{args.seed}/{args.model}"
     else:
-        args.save = f"checkpoints/{args.model}"
+        args.save = f"/home/haichao/zby/atlas/checkpoints/{args.model}"
+
     with open(os.path.join(args.save, "zeroshot_accuracies.json"), 'r') as f:
         args.zs_acc = json.load(f)
     with open(os.path.join(args.save, "ft_accuracies.json"), 'r') as f:
