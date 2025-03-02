@@ -35,11 +35,6 @@ def main(rank, args):
     """Main function for training MetaNet-aTLAS model"""
 
     # Load task vector pool
-    # pool = [
-    #     "Cars", "DTD", "EuroSAT", "GTSRB", "MNIST", "RESISC45", "SUN397", "SVHN",
-    #     "CIFAR10", "CIFAR100", "ImageNet", "STL10", "Food101", "Caltech101", "Caltech256",
-    #     "FGVCAircraft", "Flowers102", "OxfordIIITPet", "CUB200", "PascalVOC", "Country211", "UCF101",
-    # ]
     pool = [
         "Cars", "DTD", "EuroSAT", "GTSRB", "MNIST", "RESISC45", "SUN397", "SVHN",
     ]
@@ -55,6 +50,8 @@ def main(rank, args):
             task_vectors[dataset] = NonLinearTaskVector(pretrained_checkpoint, finetuned_checkpoint)
 
     args.rank = rank
+    setup_ddp(args.rank, args.world_size, port=args.port)
+
     for dataset in args.datasets:
         args.target_dataset = dataset + "Val"
         print("=" * 100)
@@ -62,6 +59,8 @@ def main(rank, args):
         print("=" * 100)
 
         train(task_vectors, args)
+
+    cleanup_ddp()
 
 
 def train(task_vectors, args):
@@ -74,7 +73,7 @@ def train(task_vectors, args):
     args: argparse.Namespace
         Command line arguments
     """
-    setup_ddp(args.rank, args.world_size, port=args.port)
+    # setup_ddp(args.rank, args.world_size, port=args.port)
     target_dataset = args.target_dataset
     ckpdir = os.path.join(args.save, target_dataset)
     os.makedirs(ckpdir, exist_ok=True)
@@ -114,11 +113,11 @@ def train(task_vectors, args):
 
     # Use more aggressive random crop with horizontal flip preprocessing
     preprocess_fn = torchvision.transforms.Compose([
-                                                       torchvision.transforms.RandomResizedCrop(
-                                                           size=224, scale=(0.5, 1),
-                                                           interpolation=torchvision.transforms.InterpolationMode.BICUBIC
-                                                       ), torchvision.transforms.RandomHorizontalFlip(p=0.5),
-                                                   ] + model.train_preprocess.transforms[-3:])
+        torchvision.transforms.RandomResizedCrop(
+            size=224, scale=(0.5, 1),
+            interpolation=torchvision.transforms.InterpolationMode.BICUBIC
+        ), torchvision.transforms.RandomHorizontalFlip(p=0.5),
+    ] + model.train_preprocess.transforms[-3:])
 
     # Get dataset and data loader
     dataset = get_dataset(
@@ -274,34 +273,20 @@ def train(task_vectors, args):
         with open(log_path, 'w') as f:
             json.dump(comp_acc, f, indent=4)
 
-    cleanup_ddp()
+    # cleanup_ddp()
 
 
 if __name__ == "__main__":
     # Target datasets and training epochs
     target_datasets = {
-        "Cars": 5,  # 35
-        "DTD": 5,  # 76
-        "EuroSAT": 5,  # 13
-        "GTSRB": 5,  # 11
+        "Cars": 35,  # 35
+        "DTD": 76,  # 76
+        "EuroSAT": 13,  # 13
+        "GTSRB": 11,  # 11
         "MNIST": 5,  # 5
-        "RESISC45": 5,  # 15
-        "SUN397": 5,  # 14
-        "SVHN": 5,  # 4
-        # "CIFAR10": 5,
-        # "CIFAR100": 6,
-        # "ImageNet": 10,
-        # "STL10": 4,
-        # "Food101": 15,
-        # "Caltech101": 10,
-        # "Caltech256": 8,
-        # "FGVCAircraft": 60,
-        # "Flowers102": 40,
-        # "OxfordIIITPet": 5,
-        # "CUB200": 20,
-        # "PascalVOC": 10,
-        # "Country211": 15,
-        # "UCF101": 20,
+        "RESISC45": 15,  # 15
+        "SUN397": 14,  # 14
+        "SVHN": 4,  # 4
     }
 
     # Parse command line arguments
@@ -325,11 +310,12 @@ if __name__ == "__main__":
     with open(os.path.join(args.save, "zeroshot_accuracies.json"), 'r') as f:
         args.zs_acc = json.load(f)
 
-    save_dir = args.save
-    if args.subsample is not None:
-        save_dir += f"_{args.subsample * 100:.0f}perc"
-        # Create directory
-        os.makedirs(save_dir, exist_ok=True)
+    save_dir = args.save + f"-meta"
+    os.makedirs(save_dir, exist_ok=True)
+    # if args.subsample is not None:
+    #     save_dir += f"_{args.subsample * 100:.0f}perc"
+    #     # Create directory
+    #     os.makedirs(save_dir, exist_ok=True)
 
     # Launch distributed training
     torch.multiprocessing.spawn(main, args=(args,), nprocs=args.world_size)
