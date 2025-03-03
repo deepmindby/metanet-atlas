@@ -10,6 +10,8 @@ import time
 import json
 import torch
 import torchvision
+import matplotlib.pyplot as plt
+import numpy as np
 
 from torch.cuda.amp import GradScaler
 from src.linearize import LinearizedImageEncoder
@@ -29,6 +31,57 @@ from src.distributed import cleanup_ddp, distribute_loader, is_main_process, set
 def lp_reg(x, p=None, gamma=0.5) -> torch.Tensor:
     """L1 or L2 regularization term"""
     return 0 if p is None else gamma * torch.norm(x, p=p, dim=0).mean()
+
+
+def plot_accuracy_curve(accuracies, dataset_name, save_dir):
+    """Plot and save accuracy curve
+
+    Args:
+        accuracies: list of accuracy values for each epoch
+        dataset_name: string, name of the dataset
+        save_dir: string, directory to save the plot
+    """
+    plt.figure(figsize=(10, 6))
+    epochs = list(range(1, len(accuracies) + 1))
+
+    plt.plot(epochs, [acc*100 for acc in accuracies], 'b-o', linewidth=2, markersize=8)
+    plt.grid(True, linestyle='--', alpha=0.7)
+
+    plt.xlabel('Epochs', fontsize=14)
+    plt.ylabel('Accuracy (%)', fontsize=14)
+    plt.title(f'Validation Accuracy vs. Epochs for {dataset_name}', fontsize=16)
+
+    # Set y-axis range slightly wider than the data range
+    min_acc = min(accuracies) * 100 - 1
+    max_acc = max(accuracies) * 100 + 1
+    plt.ylim(min_acc, max_acc)
+
+    # Annotate final accuracy
+    final_acc = accuracies[-1] * 100
+    plt.annotate(f'Final: {final_acc:.2f}%',
+                 xy=(len(accuracies), final_acc),
+                 xytext=(len(accuracies)-0.5, final_acc+0.5),
+                 fontsize=12,
+                 arrowprops=dict(facecolor='red', shrink=0.05))
+
+    # Save plot
+    os.makedirs(save_dir, exist_ok=True)
+    plot_path = os.path.join(save_dir, f'{dataset_name}_accuracy_curve.png')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Accuracy curve saved to: {plot_path}")
+
+    # Save data as JSON
+    data_path = os.path.join(save_dir, f'{dataset_name}_accuracy_data.json')
+    with open(data_path, 'w') as f:
+        json.dump({
+            'dataset': dataset_name,
+            'epochs': epochs,
+            'accuracies': [float(acc) for acc in accuracies]
+        }, f, indent=4)
+
+    print(f"Accuracy data saved to: {data_path}")
 
 
 def main(rank, args):
@@ -52,10 +105,11 @@ def main(rank, args):
     args.rank = rank
     setup_ddp(args.rank, args.world_size, port=args.port)
 
-    for dataset in args.datasets:
+    for dataset, num_epochs in args.datasets.items():
         args.target_dataset = dataset + "Val"
+        args.epochs = num_epochs  # Use dataset-specific epochs
         print("=" * 100)
-        print(f"Learning MetaNet-aTLAS for {dataset} with {args.model}")
+        print(f"Learning MetaNet-aTLAS for {dataset} with {args.model} for {args.epochs} epochs")
         print("=" * 100)
 
         train(task_vectors, args)
@@ -73,10 +127,18 @@ def train(task_vectors, args):
     args: argparse.Namespace
         Command line arguments
     """
-    # setup_ddp(args.rank, args.world_size, port=args.port)
+    # Setup for training
     target_dataset = args.target_dataset
     ckpdir = os.path.join(args.save, target_dataset)
     os.makedirs(ckpdir, exist_ok=True)
+
+    # Add monitoring variables
+    train_losses = []
+    val_accuracies = []
+    old_params = None
+    param_changes = []
+    grad_norms = []
+    coefficient_stats = []
 
     assert args.finetuning_mode in [
         "linear",
@@ -201,25 +263,92 @@ def train(task_vectors, args):
             inputs = batch["images"].cuda()
             data_time = time.time() - start_time
 
+            # Check Meta-Net coefficients periodically
+            if i % (print_every * 5) == 0 and is_main_process():
+                with torch.no_grad():
+                    # Get a small batch of samples for analysis
+                    sample_batch = inputs[:min(4, inputs.shape[0])]
+
+                    # Get base features and calculate coefficients
+                    if linearized_finetuning:
+                        base_features = ddp_model.module.image_encoder.model.func0(
+                            ddp_model.module.image_encoder.model.params0,
+                            ddp_model.module.image_encoder.model.buffers0,
+                            sample_batch
+                        )
+                        coefficients = ddp_model.module.image_encoder.model.meta_net(base_features)
+                    else:
+                        # Get the features directly
+                        base_features = ddp_model.module.image_encoder.func(
+                            ddp_model.module.image_encoder.params,
+                            ddp_model.module.image_encoder.buffer,
+                            sample_batch
+                        )
+                        coefficients = ddp_model.module.image_encoder.meta_net(base_features)
+
+                    # Calculate and print coefficient statistics
+                    coef_mean = coefficients.mean().item()
+                    coef_std = coefficients.std().item()
+                    coef_min = coefficients.min().item()
+                    coef_max = coefficients.max().item()
+
+                    coefficient_stats.append({
+                        'mean': coef_mean,
+                        'std': coef_std,
+                        'min': coef_min,
+                        'max': coef_max
+                    })
+
+                    print(f"Meta-Net coefficients - Mean: {coef_mean:.4f}, Std: {coef_std:.4f}, Min: {coef_min:.4f}, Max: {coef_max:.4f}")
+
             with torch.autocast(device_type='cuda', dtype=torch.float16):
                 logits = ddp_model(inputs)
                 labels = batch["labels"].cuda()
                 loss = loss_fn(logits, labels)
                 # Apply regularization
                 meta_net_params = torch.cat([p.flatten() for p in meta_net.parameters()])
-                reg = lp_reg(meta_net_params, args.lp_reg)
+                reg = lp_reg(meta_net_params, args.lp_reg, gamma=0.1)
                 loss = loss + reg
                 # Scale loss
                 loss = loss / args.num_grad_accumulation
 
+            # Record loss
+            if is_main_process():
+                train_losses.append(loss.item())
+
             scaler.scale(loss).backward()
 
             if (i + 1) % args.num_grad_accumulation == 0:
-                scheduler(step)
+                # Calculate gradient norm before clipping
+                grad_norm = torch.norm(torch.stack([p.grad.norm() for p in params if p.grad is not None]))
+                if is_main_process():
+                    grad_norms.append(grad_norm.item())
 
+                # Track parameter changes
+                if old_params is None and is_main_process():
+                    old_params = {name: param.clone().detach() for name, param in meta_net.named_parameters()}
+
+                # Execute optimizer step
                 torch.nn.utils.clip_grad_norm_(params, 1.0)
+                scheduler(step)
                 scaler.step(optimizer)
                 scaler.update()
+
+                # Calculate parameter changes after update
+                if old_params is not None and is_main_process():
+                    current_changes = []
+                    for name, param in meta_net.named_parameters():
+                        if name in old_params:
+                            change = (param - old_params[name]).abs().mean().item()
+                            current_changes.append(change)
+                            old_params[name] = param.clone().detach()
+
+                    avg_change = sum(current_changes) / len(current_changes) if current_changes else 0
+                    param_changes.append(avg_change)
+
+                    if step % print_every == 0:
+                        print(f"Step {step} - Gradient norm: {grad_norm:.6f}, Avg param change: {avg_change:.8f}")
+
                 optimizer.zero_grad()
 
             batch_time = time.time() - start_time
@@ -241,13 +370,15 @@ def train(task_vectors, args):
         if is_main_process():
             image_encoder = ddp_model.module.image_encoder
             acc = eval_single_dataset(image_encoder, target_dataset, args)["top1"]
+            val_accuracies.append(acc)
+            print(f"Epoch {epoch+1}/{args.epochs} validation accuracy: {acc*100:.2f}%")
             if acc > best_acc:
                 best_acc = acc
                 best_meta_net = {k: v.data.clone() for k, v in meta_net.state_dict().items()}
                 # Save best model
                 torch.save(best_meta_net, head_path)
 
-    # Save results
+    # Save results and generate accuracy plot
     if is_main_process():
         comp_acc[target_dataset] = best_acc
         target_dataset_no_val = target_dataset.replace("Val", "")
@@ -269,24 +400,89 @@ def train(task_vectors, args):
         image_encoder = ddp_model.module.image_encoder
         comp_acc[target_dataset_no_val] = eval_single_dataset(image_encoder, target_dataset_no_val, args)["top1"]
 
+        # Plot accuracy curve
+        if val_accuracies:
+            plot_dir = os.path.join(args.save, "accuracy_plots")
+            plot_accuracy_curve(val_accuracies, target_dataset_no_val, plot_dir)
+
+        # Plot training curves
+        if train_losses and len(train_losses) > 1:
+            # Create plots directory
+            plot_dir = os.path.join(args.save, "monitoring_plots")
+            os.makedirs(plot_dir, exist_ok=True)
+
+            # Plot training loss
+            plt.figure(figsize=(10, 6))
+            plt.plot(train_losses, 'r-')
+            plt.xlabel('Iterations')
+            plt.ylabel('Loss')
+            plt.title(f'Training Loss for {target_dataset.replace("Val", "")}')
+            plt.savefig(os.path.join(plot_dir, f"{target_dataset.replace('Val', '')}_loss_curve.png"))
+            plt.close()
+
+            # Plot gradient norms
+            if grad_norms:
+                plt.figure(figsize=(10, 6))
+                plt.plot(grad_norms, 'g-')
+                plt.xlabel('Optimization Steps')
+                plt.ylabel('Gradient Norm')
+                plt.title(f'Gradient Norms for {target_dataset.replace("Val", "")}')
+                plt.savefig(os.path.join(plot_dir, f"{target_dataset.replace('Val', '')}_grad_norms.png"))
+                plt.close()
+
+            # Plot parameter changes
+            if param_changes:
+                plt.figure(figsize=(10, 6))
+                plt.plot(param_changes, 'b-')
+                plt.xlabel('Optimization Steps')
+                plt.ylabel('Average Parameter Change')
+                plt.title(f'Parameter Changes for {target_dataset.replace("Val", "")}')
+                plt.savefig(os.path.join(plot_dir, f"{target_dataset.replace('Val', '')}_param_changes.png"))
+                plt.close()
+
+            # Plot coefficient statistics
+            if coefficient_stats:
+                means = [stats['mean'] for stats in coefficient_stats]
+                stds = [stats['std'] for stats in coefficient_stats]
+                plt.figure(figsize=(10, 6))
+                plt.plot(means, 'b-', label='Mean')
+                plt.fill_between(range(len(means)),
+                                [m-s for m,s in zip(means, stds)],
+                                [m+s for m,s in zip(means, stds)],
+                                alpha=0.2, color='b')
+                plt.xlabel('Checkpoints')
+                plt.ylabel('Coefficient Value')
+                plt.title(f'Meta-Net Coefficient Statistics for {target_dataset.replace("Val", "")}')
+                plt.legend()
+                plt.savefig(os.path.join(plot_dir, f"{target_dataset.replace('Val', '')}_coef_stats.png"))
+                plt.close()
+
+            # Save monitoring data as JSON
+            monitoring_data = {
+                'train_losses': train_losses,
+                'grad_norms': grad_norms,
+                'param_changes': param_changes,
+                'coefficient_stats': coefficient_stats
+            }
+            with open(os.path.join(plot_dir, f"{target_dataset.replace('Val', '')}_monitoring_data.json"), 'w') as f:
+                json.dump(monitoring_data, f, indent=4)
+
         # Save results
         with open(log_path, 'w') as f:
             json.dump(comp_acc, f, indent=4)
-
-    # cleanup_ddp()
 
 
 if __name__ == "__main__":
     # Target datasets and training epochs
     target_datasets = {
-        "Cars": 35,  # 35
-        "DTD": 76,  # 76
-        "EuroSAT": 13,  # 13
-        "GTSRB": 11,  # 11
-        "MNIST": 5,  # 5
-        "RESISC45": 15,  # 15
-        "SUN397": 14,  # 14
-        "SVHN": 4,  # 4
+        "Cars": 4,  # 35           # Fine-grained car classification
+        "DTD": 4,  # 76           # Texture description
+        "EuroSAT": 4,  # 12      # Satellite imagery
+        "GTSRB": 4,  # 11          # Traffic signs
+        "MNIST": 4,  # 5         # Handwritten digits
+        "RESISC45": 4,  # 15       # Remote sensing imagery
+        "SUN397": 2,  # 14      # Scene classification
+        "SVHN": 4,  # 4            # Street view house numbers
     }
 
     # Parse command line arguments
@@ -294,16 +490,17 @@ if __name__ == "__main__":
     args.datasets = target_datasets
     # Set default parameters
     args.lr = 1e-2  # MetaNet parameters need higher learning rate
-    args.epochs = 5
+
     # Use gradient accumulation to simulate larger batch sizes
     args.batch_size = 64 if args.model == "ViT-L-14" else 128
     args.num_grad_accumulation = 2 if args.model == "ViT-L-14" else 1
     args.print_every = 10
 
-    if args.seed is not None:
-        args.save = f"checkpoints_{args.seed}/{args.model}"
-    else:
-        args.save = f"checkpoints/{args.model}"
+    # if args.seed is not None:
+    #     args.save = f"checkpoints_{args.seed}/{args.model}"
+    # else:
+    #     args.save = f"checkpoints/{args.model}"
+    args.save = f"checkpoints/{args.model}"
 
 
     # Load zero-shot accuracy

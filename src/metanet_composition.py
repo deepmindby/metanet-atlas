@@ -48,10 +48,13 @@ class MetaNet(nn.Module):
         )
 
         # Initialize to zero so that the combination coefficients are close to zero in the initial state
-        nn.init.zeros_(self.net[0].weight)
-        nn.init.zeros_(self.net[0].bias)
-        nn.init.zeros_(self.net[2].weight)
-        nn.init.zeros_(self.net[2].bias)
+        # nn.init.zeros_(self.net[0].weight)
+        # nn.init.zeros_(self.net[0].bias)
+        # nn.init.zeros_(self.net[2].weight)
+        # nn.init.zeros_(self.net[2].bias)
+        nn.init.normal_(self.net[0].weight, mean=0.0, std=0.01)
+        nn.init.normal_(self.net[0].bias, mean=0.0, std=0.01)
+
 
     def forward(self, x):
         """Forward propagation
