@@ -11,19 +11,25 @@ import matplotlib.pyplot as plt
 import argparse
 
 
-def main(ckpt_dir, model_name, datasets=None):
+def main(ckpt_dir, model_name, finetuning_mode="standard", datasets=None):
     """Main function to compare aTLAS and MetaNet-aTLAS performance
 
     Args:
         ckpt_dir: Checkpoint directory path
         model_name: Model name (e.g., "ViT-B-32")
+        finetuning_mode: Finetuning mode ("standard" or "linear")
         datasets: List of datasets to compare, defaults to all datasets
     """
     save_dir = os.path.join(ckpt_dir, model_name)
 
-    # Load results
-    atlas_path = os.path.join(save_dir, "learned_additions_std_search.json")
-    meta_atlas_path = os.path.join(save_dir, "learned_metanet.json")
+    # Load results based on finetuning mode
+    if finetuning_mode == "linear":
+        atlas_path = os.path.join(save_dir, "learned_linear_additions.json")
+        meta_atlas_path = os.path.join(save_dir, "metanet_linear_results.json")
+    else:
+        # Default to standard finetuning mode
+        atlas_path = os.path.join(save_dir, "learned_additions_std_aniso.json")
+        meta_atlas_path = os.path.join(save_dir, "metanet_results.json")
 
     if not os.path.exists(atlas_path):
         print(f"Error: aTLAS results file not found {atlas_path}")
@@ -59,7 +65,7 @@ def main(ckpt_dir, model_name, datasets=None):
     meta_avg = np.mean(meta_values) if meta_values else 0
 
     print("=" * 100)
-    print(f"Model: {model_name}")
+    print(f"Model: {model_name}, Finetuning Mode: {finetuning_mode}")
     print("=" * 100)
     print(f"{'Dataset':<15} {'aTLAS':<15} {'MetaNet-aTLAS':<15} {'Improvement':<10}")
     print("-" * 60)
@@ -96,23 +102,31 @@ def main(ckpt_dir, model_name, datasets=None):
 
     plt.xlabel('Datasets')
     plt.ylabel('Accuracy (%)')
-    plt.title(f'aTLAS vs MetaNet-aTLAS ({model_name})')
+    plt.title(f'aTLAS vs MetaNet-aTLAS ({model_name}, {finetuning_mode} mode)')
     plt.xticks(x, datasets, rotation=45, ha='right')
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "atlas_vs_metanet.png"))
+    plt.savefig(os.path.join(save_dir, f"atlas_vs_metanet_{finetuning_mode}.png"))
     plt.close()
 
-    print(f"Comparison chart saved to {os.path.join(save_dir, 'atlas_vs_metanet.png')}")
+    print(f"Comparison chart saved to {os.path.join(save_dir, f'atlas_vs_metanet_{finetuning_mode}.png')}")
 
 
 if __name__ == "__main__":
-    ckpt_dir = "checkpoints"
-    model_name = "ViT-B-32"
+    parser = argparse.ArgumentParser(description="Compare aTLAS and MetaNet-aTLAS performance")
+    parser.add_argument("--ckpt_dir", type=str, default="checkpoints", help="Checkpoint directory")
+    parser.add_argument("--model_name", type=str, default="ViT-B-32", help="Model name")
+    parser.add_argument("--finetuning-mode", type=str, default="standard", choices=["standard", "linear"],
+                        help="Finetuning mode (standard or linear)")
+    parser.add_argument("--datasets", nargs="+", default=None, help="List of datasets to compare")
 
-    datasets = [
-        "Cars", "DTD", "EuroSAT", "GTSRB", "MNIST", "RESISC45", "SUN397", "SVHN"
-    ]
+    args = parser.parse_args()
 
-    main(ckpt_dir, model_name, datasets)
+    datasets = args.datasets
+    if datasets is None:
+        datasets = [
+            "Cars", "DTD", "EuroSAT", "GTSRB", "MNIST", "RESISC45", "SUN397", "SVHN"
+        ]
+
+    main(args.ckpt_dir, args.model_name, args.finetuning_mode, datasets)

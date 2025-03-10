@@ -475,14 +475,14 @@ def train(task_vectors, args):
 if __name__ == "__main__":
     # Target datasets and training epochs
     target_datasets = {
-        "Cars": 4,  # 35           # Fine-grained car classification
-        "DTD": 4,  # 76           # Texture description
-        "EuroSAT": 4,  # 12      # Satellite imagery
-        "GTSRB": 4,  # 11          # Traffic signs
-        "MNIST": 4,  # 5         # Handwritten digits
-        "RESISC45": 4,  # 15       # Remote sensing imagery
-        "SUN397": 2,  # 14      # Scene classification
-        "SVHN": 4,  # 4            # Street view house numbers
+        "Cars": 10,  # 35           # Fine-grained car classification
+        "DTD": 10,  # 76           # Texture description
+        "EuroSAT": 10,  # 12      # Satellite imagery
+        "GTSRB": 10,  # 11          # Traffic signs
+        "MNIST": 10,  # 5         # Handwritten digits
+        "RESISC45": 10,  # 15       # Remote sensing imagery
+        "SUN397": 10,  # 14      # Scene classification
+        "SVHN": 10,  # 4            # Street view house numbers
     }
 
     # Parse command line arguments

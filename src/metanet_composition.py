@@ -47,11 +47,7 @@ class MetaNet(nn.Module):
             nn.Linear(hidden_dim, output_dim)
         )
 
-        # Initialize to zero so that the combination coefficients are close to zero in the initial state
-        # nn.init.zeros_(self.net[0].weight)
-        # nn.init.zeros_(self.net[0].bias)
-        # nn.init.zeros_(self.net[2].weight)
-        # nn.init.zeros_(self.net[2].bias)
+        # Initialize with small normal distribution values for better training stability
         nn.init.normal_(self.net[0].weight, mean=0.0, std=0.01)
         nn.init.normal_(self.net[0].bias, mean=0.0, std=0.01)
 
@@ -111,16 +107,18 @@ class MetaNetImageEncoder(nn.Module):
         self.dparams = [[tv.vector[k] for k in tv.vector] for tv in task_vectors]
         self.blockwise = blockwise
 
-        # Get the feature dimension of the model, assuming it's the last parameter object
-        # Note: Different models may need different ways to get the feature dimension
-        if hasattr(model, 'model') and hasattr(model.model, 'ln_final'):
-            feat_dim = model.model.ln_final.bias.numel()
-        else:
-            # If can't determine, use a default value or infer from model structure
-            # Here we assume using ViT's output dimension, typically 768 (ViT-B) or 1024 (ViT-L)
-            feat_dim = 768
+        # Get the actual feature dimension of the model using a test forward pass
+        with torch.no_grad():
+            # Create a test input tensor with matching dtype
+            param = next(iter(params))
+            dummy_input = torch.zeros(1, 3, 224, 224, dtype=param.dtype, device=param.device)
+            # Get features from the base model
+            features = self.func(params, self.buffer, dummy_input)
+            feat_dim = features.shape[1]  # Get the actual feature dimension
 
-            # Initialize Meta-Net
+        # print(f"Detected feature dimension: {feat_dim}")
+
+        # Initialize Meta-Net with the correct dimensions
         if blockwise:
             # If using blockwise, each parameter block has its own coefficients
             self.meta_net = MetaNet(feat_dim, len(task_vectors) * len(self.params))
@@ -156,6 +154,10 @@ class MetaNetImageEncoder(nn.Module):
         features: Tensor [batch_size, feature_dim]
             Encoded features
         """
+        # Ensure input has the same dtype as model parameters
+        param_dtype = next(iter(self.params)).dtype
+        x = x.to(param_dtype)
+
         # 1. First get base features
         with torch.no_grad():
             base_features = self.func(self.params, self.buffer, x)
@@ -182,8 +184,8 @@ class MetaNetImageEncoder(nn.Module):
                 coefs = batch_coefficients[i]  # [n_task_vectors]
                 dparams = [sum([p * c for p, c in zip(dp, coefs)]) for dp in zip(*self.dparams)]
 
-            # Apply combined parameter differences
-            new_params = [dp + p for dp, p in zip(dparams, self.params)]
+            # Apply combined parameter differences with proper dtype
+            new_params = [(dp + p).to(p.dtype) for dp, p in zip(dparams, self.params)]
 
             # Calculate output for current sample
             output = self.func(new_params, self.buffer, x[i:i + 1])
@@ -222,11 +224,18 @@ class MetaNetLinearizedModel(nn.Module):
         self.dparams = [[tv.vector[k] for k in tv.vector if k.startswith('model.params.')] for tv in task_vectors]
         self.blockwise = blockwise
 
-        # Get the feature dimension of the model
-        # Note: This is a simplified implementation, in practice it may need to be adjusted according to the specific model
-        feat_dim = 768  # Assume using ViT-B's feature dimension
+        # Get the actual feature dimension of the model using a test forward pass
+        with torch.no_grad():
+            # Create a test input tensor with matching dtype
+            param = next(iter(model.params0))
+            dummy_input = torch.zeros(1, 3, 224, 224, dtype=param.dtype, device=param.device)
+            # Get features from the base model
+            features = self.func0(self.params0, self.buffers0, dummy_input)
+            feat_dim = features.shape[1]  # Get the actual feature dimension
 
-        # Initialize Meta-Net
+        print(f"Detected feature dimension: {feat_dim}")
+
+        # Initialize Meta-Net with the correct dimensions
         if blockwise:
             self.meta_net = MetaNet(feat_dim, len(task_vectors) * len(self.params0))
         else:
@@ -252,6 +261,10 @@ class MetaNetLinearizedModel(nn.Module):
         outputs: Tensor [batch_size, feature_dim]
             Model outputs
         """
+        # Ensure input has the same dtype as model parameters
+        param_dtype = next(iter(self.params0)).dtype
+        x = x.to(param_dtype)
+
         # 1. First get base features for generating coefficients
         with torch.no_grad():
             base_features = self.func0(self.params0, self.buffers0, x)
@@ -269,10 +282,10 @@ class MetaNetLinearizedModel(nn.Module):
         for i in range(batch_size):
             if self.blockwise:
                 coefs = batch_coefficients[i]
-                dparams = [sum([p * c[i] for p, c in zip(dp, coefs)]) for i, dp in enumerate(zip(*self.dparams))]
+                dparams = [sum([p * c[i] for p, c in zip(dp, coefs)]).to(param_dtype) for i, dp in enumerate(zip(*self.dparams))]
             else:
                 coefs = batch_coefficients[i]
-                dparams = [sum([p * c for p, c in zip(dp, coefs)]) for dp in zip(*self.dparams)]
+                dparams = [sum([p * c for p, c in zip(dp, coefs)]).to(param_dtype) for dp in zip(*self.dparams)]
 
             # Apply first-order Taylor expansion to linearized model
             out, dp = jvp(
