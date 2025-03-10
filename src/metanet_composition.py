@@ -1,12 +1,11 @@
-"""Dynamic Task Vector Composition Based on Meta-Net
+"""Dynamic Task Vector Composition Based on Meta-Net with Causal Intervention
 
-This module implements the MetaNet-aTLAS algorithm, which dynamically generates
-task vector composition coefficients for each sample through a Meta-Net network,
-enabling sample-level knowledge composition.
+This module implements the MetaNet-aTLAS algorithm with causal intervention,
+which dynamically generates task vector composition coefficients for each sample
+through a Meta-Net network, and enhances robustness through causal intervention.
 
-Unlike the original aTLAS, MetaNet-aTLAS dynamically adjusts the combination weights
-of different task vectors according to the characteristics of the input sample,
-improving the model's adaptability and generalization ability.
+The causal intervention helps the model to understand which parameter blocks are
+most important for prediction, and reduces dependency on any single block.
 """
 
 import torch
@@ -76,7 +75,7 @@ class MetaNetImageEncoder(nn.Module):
     task vectors using these coefficients.
     """
 
-    def __init__(self, model, task_vectors, blockwise=False) -> None:
+    def __init__(self, model, task_vectors, blockwise=False, enable_causal=False) -> None:
         """Initialize Meta-Net image encoder
 
         Parameters:
@@ -87,6 +86,8 @@ class MetaNetImageEncoder(nn.Module):
             List of task vectors
         blockwise: bool, default: False
             Whether to use different coefficients for each parameter block
+        enable_causal: bool, default: False
+            Whether to enable causal intervention during training
         """
         super().__init__()
 
@@ -107,6 +108,9 @@ class MetaNetImageEncoder(nn.Module):
         self.dparams = [[tv.vector[k] for k in tv.vector] for tv in task_vectors]
         self.blockwise = blockwise
 
+        # Causal intervention settings
+        self.enable_causal = enable_causal
+
         # Get the actual feature dimension of the model using a test forward pass
         with torch.no_grad():
             # Create a test input tensor with matching dtype
@@ -115,8 +119,6 @@ class MetaNetImageEncoder(nn.Module):
             # Get features from the base model
             features = self.func(params, self.buffer, dummy_input)
             feat_dim = features.shape[1]  # Get the actual feature dimension
-
-        # print(f"Detected feature dimension: {feat_dim}")
 
         # Initialize Meta-Net with the correct dimensions
         if blockwise:
@@ -141,13 +143,17 @@ class MetaNetImageEncoder(nn.Module):
         """Set training mode"""
         super().train(mode)
 
-    def forward(self, x) -> torch.Tensor:
-        """Forward propagation
+    def forward(self, x, intervention_block=None, intervention_mode="zero") -> torch.Tensor:
+        """Forward propagation with optional causal intervention
 
         Parameters:
         ----------
         x: Tensor [batch_size, 3, H, W]
             Batch of input images
+        intervention_block: int, optional
+            Block index to intervene on, or None for no intervention
+        intervention_mode: str, default="zero"
+            Mode for intervention: "zero" to zero out coefficients, "perturb" to add noise
 
         Returns:
         ----------
@@ -166,9 +172,30 @@ class MetaNetImageEncoder(nn.Module):
         if self.blockwise:
             # If using blockwise, reshape coefficients to [batch_size, n_task_vectors, n_params]
             batch_coefficients = self.meta_net(base_features).reshape(-1, len(self.dparams), len(self.params))
+
+            # Apply intervention if specified (only in training mode with causal enabled)
+            if intervention_block is not None and self.training and self.enable_causal:
+                # Create a copy of coefficients to modify
+                intervened_coeffs = batch_coefficients.clone()
+
+                # Apply intervention based on the specified mode
+                if intervention_mode == "zero":
+                    # Zero out coefficients for the specified block
+                    intervened_coeffs[:, :, intervention_block] = 0.0
+                elif intervention_mode == "perturb":
+                    # Add noise to coefficients for the specified block
+                    noise = torch.randn_like(intervened_coeffs[:, :, intervention_block]) * 0.1
+                    intervened_coeffs[:, :, intervention_block] += noise
+
+                # Use intervened coefficients
+                batch_coefficients = intervened_coeffs
+
         else:
             # Otherwise coefficients shape is [batch_size, n_task_vectors]
             batch_coefficients = self.meta_net(base_features)
+
+            # For non-blockwise, intervention doesn't make sense
+            # as we can't target specific parameter blocks
 
         # 3. Apply specific combination coefficients for each sample in the batch
         batch_size = x.size(0)
@@ -194,6 +221,47 @@ class MetaNetImageEncoder(nn.Module):
         # 4. Combine outputs from all samples
         return torch.cat(all_outputs, dim=0)
 
+    def compute_intervention_loss(self, x):
+        """Compute variance penalty loss through causal intervention
+
+        For each block, this method:
+        1. Performs a forward pass with the block's coefficients set to zero
+        2. Measures the difference between normal output and intervened output
+        3. Returns the sum of squared differences as a penalty term
+
+        Parameters:
+        ----------
+        x: Tensor [batch_size, 3, H, W]
+            Batch of input images
+
+        Returns:
+        ----------
+        loss: Tensor
+            Variance penalty loss
+        """
+        if not self.blockwise or not self.enable_causal:
+            # If not using blockwise coefficients or causal intervention not enabled,
+            # return zero loss
+            return torch.tensor(0.0, device=x.device)
+
+        # Get regular outputs first
+        regular_outputs = self.forward(x)
+
+        # For each parameter block, compute intervention loss
+        intervention_diffs = []
+        for j in range(len(self.params)):
+            # Get outputs with intervention on block j
+            intervened_outputs = self.forward(x, intervention_block=j, intervention_mode="zero")
+
+            # Compute squared difference
+            diff = torch.pow(regular_outputs - intervened_outputs, 2).mean()
+            intervention_diffs.append(diff)
+
+        # Sum up differences across all blocks
+        total_variance = sum(intervention_diffs)
+
+        return total_variance
+
 
 class MetaNetLinearizedModel(nn.Module):
     """Meta-Net based linearized model for dynamic composition of task vectors in linearized models
@@ -201,7 +269,7 @@ class MetaNetLinearizedModel(nn.Module):
     Similar to MetaNetImageEncoder, but designed specifically for linearized models.
     """
 
-    def __init__(self, model, task_vectors, blockwise=False) -> None:
+    def __init__(self, model, task_vectors, blockwise=False, enable_causal=False) -> None:
         """Initialize Meta-Net linearized model
 
         Parameters:
@@ -212,6 +280,8 @@ class MetaNetLinearizedModel(nn.Module):
             List of linearized task vectors
         blockwise: bool, default: False
             Whether to use different coefficients for each parameter block
+        enable_causal: bool, default: False
+            Whether to enable causal intervention during training
         """
         super().__init__()
 
@@ -223,6 +293,9 @@ class MetaNetLinearizedModel(nn.Module):
         # Store task vectors
         self.dparams = [[tv.vector[k] for k in tv.vector if k.startswith('model.params.')] for tv in task_vectors]
         self.blockwise = blockwise
+
+        # Causal intervention settings
+        self.enable_causal = enable_causal
 
         # Get the actual feature dimension of the model using a test forward pass
         with torch.no_grad():
@@ -248,13 +321,17 @@ class MetaNetLinearizedModel(nn.Module):
         new_self.dparams = [[fn(x) for x in tv] for tv in new_self.dparams]
         return new_self
 
-    def forward(self, x) -> torch.Tensor:
-        """Forward propagation
+    def forward(self, x, intervention_block=None, intervention_mode="zero") -> torch.Tensor:
+        """Forward propagation with optional causal intervention
 
         Parameters:
         ----------
         x: Tensor [batch_size, 3, H, W]
             Batch of input images
+        intervention_block: int, optional
+            Block index to intervene on, or None for no intervention
+        intervention_mode: str, default="zero"
+            Mode for intervention: "zero" to zero out coefficients, "perturb" to add noise
 
         Returns:
         ----------
@@ -272,8 +349,28 @@ class MetaNetLinearizedModel(nn.Module):
         # 2. Generate combination coefficients using Meta-Net
         if self.blockwise:
             batch_coefficients = self.meta_net(base_features).reshape(-1, len(self.dparams), len(self.params0))
+
+            # Apply intervention if specified (only in training mode with causal enabled)
+            if intervention_block is not None and self.training and self.enable_causal:
+                # Create a copy of coefficients to modify
+                intervened_coeffs = batch_coefficients.clone()
+
+                # Apply intervention based on the specified mode
+                if intervention_mode == "zero":
+                    # Zero out coefficients for the specified block
+                    intervened_coeffs[:, :, intervention_block] = 0.0
+                elif intervention_mode == "perturb":
+                    # Add noise to coefficients for the specified block
+                    noise = torch.randn_like(intervened_coeffs[:, :, intervention_block]) * 0.1
+                    intervened_coeffs[:, :, intervention_block] += noise
+
+                # Use intervened coefficients
+                batch_coefficients = intervened_coeffs
         else:
             batch_coefficients = self.meta_net(base_features)
+
+            # For non-blockwise, intervention doesn't make sense
+            # as we can't target specific parameter blocks
 
         # 3. Apply specific combination coefficients for each sample in the batch
         batch_size = x.size(0)
@@ -298,3 +395,44 @@ class MetaNetLinearizedModel(nn.Module):
 
         # 4. Combine outputs from all samples
         return torch.cat(all_outputs, dim=0)
+
+    def compute_intervention_loss(self, x):
+        """Compute variance penalty loss through causal intervention
+
+        For each block, this method:
+        1. Performs a forward pass with the block's coefficients set to zero
+        2. Measures the difference between normal output and intervened output
+        3. Returns the sum of squared differences as a penalty term
+
+        Parameters:
+        ----------
+        x: Tensor [batch_size, 3, H, W]
+            Batch of input images
+
+        Returns:
+        ----------
+        loss: Tensor
+            Variance penalty loss
+        """
+        if not self.blockwise or not self.enable_causal:
+            # If not using blockwise coefficients or causal intervention not enabled,
+            # return zero loss
+            return torch.tensor(0.0, device=x.device)
+
+        # Get regular outputs first
+        regular_outputs = self.forward(x)
+
+        # For each parameter block, compute intervention loss
+        intervention_diffs = []
+        for j in range(len(self.params0)):
+            # Get outputs with intervention on block j
+            intervened_outputs = self.forward(x, intervention_block=j, intervention_mode="zero")
+
+            # Compute squared difference
+            diff = torch.pow(regular_outputs - intervened_outputs, 2).mean()
+            intervention_diffs.append(diff)
+
+        # Sum up differences across all blocks
+        total_variance = sum(intervention_diffs)
+
+        return total_variance
