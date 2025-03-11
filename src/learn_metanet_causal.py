@@ -179,14 +179,16 @@ def train(task_vectors, args):
         image_encoder.model = MetaNetLinearizedModel(
             image_encoder.model, task_vectors_list,
             blockwise=args.blockwise_coef,
-            enable_causal=args.causal_intervention
+            enable_causal=args.causal_intervention,
+            top_k_ratio=args.top_k_ratio
         )
     else:
         image_encoder = ImageEncoder(args)
         image_encoder = MetaNetImageEncoder(
             image_encoder, task_vectors_list,
             blockwise=args.blockwise_coef,
-            enable_causal=args.causal_intervention
+            enable_causal=args.causal_intervention,
+            top_k_ratio=args.top_k_ratio
         )
 
     # Get classification head
@@ -199,11 +201,12 @@ def train(task_vectors, args):
 
     # Use more aggressive random crop with horizontal flip preprocessing
     preprocess_fn = torchvision.transforms.Compose([
-                                                       torchvision.transforms.RandomResizedCrop(
-                                                           size=224, scale=(0.5, 1),
-                                                           interpolation=torchvision.transforms.InterpolationMode.BICUBIC
-                                                       ), torchvision.transforms.RandomHorizontalFlip(p=0.5),
-                                                   ] + model.train_preprocess.transforms[-3:])
+        torchvision.transforms.RandomResizedCrop(
+        size=224, scale=(0.5, 1),
+        interpolation=torchvision.transforms.InterpolationMode.BICUBIC
+        ), torchvision.transforms.RandomHorizontalFlip(p=0.5),
+        ] + model.train_preprocess.transforms[-3:]
+    )
 
     # Get dataset and data loader
     dataset = get_dataset(
@@ -480,8 +483,9 @@ if __name__ == "__main__":
 
     # Use gradient accumulation to simulate larger batch sizes
     if args.batch_size is None:
-        args.batch_size = 64 if args.model == "ViT-L-14" else 128
-    args.num_grad_accumulation = 2 if args.model == "ViT-L-14" else 1
+        args.batch_size = 32
+    if args.num_grad_accumulation is None:
+        args.num_grad_accumulation = 4
     args.print_every = 10
 
     args.save = f"checkpoints/{args.model}"

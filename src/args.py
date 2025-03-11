@@ -202,6 +202,31 @@ def parse_arguments():
         default=None,
         help="Run atlas x K where the task vectors are randomly partitioned n times (few-shot only)",
     )
+    parser.add_argument(
+        "--causal_intervention",
+        action="store_true",
+        default=False,
+        help="Whether to enable causal intervention during training"
+    )
+    parser.add_argument(
+        "--var_penalty_coef",
+        type=float,
+        default=0.1,
+        help="Coefficient for variance penalty in causal intervention (alpha)"
+    )
+    parser.add_argument(
+        "--intervention_mode",
+        type=str,
+        default="zero",
+        choices=["zero", "perturb"],
+        help="Mode for intervention: zero out coefficients or perturb them"
+    )
+    parser.add_argument(
+        "--top_k_ratio",
+        type=float,
+        default=0.05,
+        help="Ratio of parameter blocks to select for intervention (default: 10%)"
+    )
 
     parsed_args = parser.parse_args()
     parsed_args.device = "cuda" if torch.cuda.is_available() else "cpu"
