@@ -465,14 +465,14 @@ def train(task_vectors, args):
 if __name__ == "__main__":
     # Target datasets and training epochs
     target_datasets = {
-        "Cars": 2,
-        "DTD": 2,
-        "EuroSAT": 2,
-        "GTSRB": 2,
-        "MNIST": 2,
-        "RESISC45": 2,
-        "SUN397": 2,
-        "SVHN": 2,
+        # "Cars": 10,
+        # "DTD": 10,
+        # "EuroSAT": 10,
+        # "GTSRB": 10,
+        "MNIST": 10,
+        # "RESISC45": 10,
+        "SUN397": 10,
+        # "SVHN": 10,
     }
 
     # Parse command line arguments
@@ -483,9 +483,9 @@ if __name__ == "__main__":
 
     # Use gradient accumulation to simulate larger batch sizes
     if args.batch_size is None:
-        args.batch_size = 32
+        args.batch_size = 128
     if args.num_grad_accumulation is None:
-        args.num_grad_accumulation = 4
+        args.num_grad_accumulation = 1
     args.print_every = 10
 
     args.save = f"checkpoints/{args.model}"
