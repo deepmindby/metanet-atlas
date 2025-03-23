@@ -174,6 +174,26 @@ def extract_class_data(dataset, cls_idx, batch_size, num_workers):
 
 def get_dataset(dataset_name, preprocess, location, batch_size=128, num_workers=16, val_fraction=0.1, max_val_samples=5000):
     # Handle datasets in the format <CLSIDX_DATASETNAME>
+    # Check if requesting precomputed features
+    if dataset_name.startswith('precomputed_'):
+        # Extract the actual dataset name
+        base_dataset_name = dataset_name[len('precomputed_'):]
+
+        # Construct path to precomputed features
+        feature_dir = os.path.join(location, 'precomputed_features', base_dataset_name)
+
+        if os.path.exists(feature_dir):
+            from src.datasets.precomputed_features import PrecomputedFeatures
+            return PrecomputedFeatures(
+                feature_dir=feature_dir,
+                preprocess=preprocess,
+                location=location,
+                batch_size=batch_size,
+                num_workers=num_workers
+            )
+        else:
+            raise ValueError(f"Precomputed features not found at {feature_dir}")
+
     cls_idx = None
     if '_' in dataset_name:
         cls_idx, dataset_name = dataset_name.split('_')
